@@ -5,7 +5,7 @@ library(tidyr)
 library(lubridate)
 
 
-FA_1999_2020 <- read_excel("raw/FA_1999_2020.xlsx") %>%
+FA_1999_2020 <- read_excel("raw/FA_1999_2020v2.xlsx") %>%
   select(-Notes) %>%
   filter(!is.na(State)) %>%
   filter(Year < 2018)
@@ -16,7 +16,7 @@ FA_1999_2020$Deaths[is.na(FA_1999_2020$Deaths)] <- 5
 FA_1999_2020$Population <- as.numeric(FA_1999_2020$Population)
 FA_1999_2020$`Crude Rate` <- FA_1999_2020$Deaths/FA_1999_2020$Population * 100000
 
-FA_2018_2023 <- read_excel("raw/FA_2018_2023.xlsx") %>%
+FA_2018_2023 <- read_excel("raw/FA_2018_2023v2.xlsx") %>%
   select(-Notes)  %>%
   filter(!is.na(State))
 
@@ -28,11 +28,10 @@ FA_2018_2023$`Crude Rate` <- FA_2018_2023$Deaths/FA_2018_2023$Population * 10000
 
 FA_1999_2023 <- rbind(FA_1999_2020, FA_2018_2023)
 
-
 FA_1999_2023 <- FA_1999_2023 %>%
   rename_with(~ gsub(" ", "_", .x)) %>%
   rename_with(~ tolower(.x)) %>%
-  select(-state_code, -sex_code, -year_code) 
+  select(-state_code, -year_code) 
 
 #-------------------------------------------------------------------------------
 
@@ -132,14 +131,7 @@ erpo_panel <- generate_erpo_panel(erpo_laws)
 
 # Merge with firearm suicide data
 # First aggregate the suicide data to total (both sexes)
-FA_total <- FA_1999_2023 %>%
-  group_by(state, year) %>%
-  summarize(
-    deaths = sum(deaths),
-    population = sum(population)/2,  
-    crude_rate = sum(deaths) / (sum(population)/1e5)
-  )
-
+FA_total <- FA_1999_2023 
 # Merge the data
 merged_data <- left_join(erpo_panel, FA_total, by = c("state", "year"))
 
@@ -180,7 +172,7 @@ merged_data$log_rate_lag2[is.infinite(merged_data$log_rate_lag2)] <- log(0.5/(me
 # Drop the first two years which have missing lagged variables
 analysis_data <- merged_data %>%
   filter(!is.na(log_rate_lag2),
-         state != 'Connecticut')
+         state != 'Connecticut', state != 'District of Columbia')
 
 # Save the prepared data
 save(analysis_data, file = "outputs/data/erpo_analysis_data.RData")

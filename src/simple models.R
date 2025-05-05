@@ -4,6 +4,7 @@ library(R2jags)
 library(ggplot2)
 library(gridExtra)
 library(patchwork)  # For combining plots
+library(superdiag)
 
 # Load data
 load("outputs/data/erpo_analysis_data.RData")
@@ -187,126 +188,135 @@ jags2 <- jags(
   n.burnin = 1000,
   n.thin = 5
 )
+# Replace Models 3 & 4 with non-centered RE parameterization and half-t prior
 
-# Model 3: Negative binomial model with state random effects and binary ERPO
-jags_model3 <- "
+# assume analysis_data is already loaded
+analysis_data <- analysis_data %>%
+  # center ERPO variables
+  mutate(
+    erpo_c       = erpo - mean(erpo, na.rm=TRUE),
+    erpo_phase_c = erpo_phase_in - mean(erpo_phase_in, na.rm=TRUE),
+    # rescale offset so intercept is on a reasonable scale
+    log_pop_off  = log(population / 1e5)
+  )
+
+state_factor <- as.numeric(factor(analysis_data$state))
+year_factor  <- as.numeric(factor(analysis_data$year))
+
+# Model 3 (binary ERPO, neg-binomial, non-centered RE)
+jags_model3_nc <- "
 model {
   # Likelihood
   for (i in 1:n) {
-    log_mu[i] <- log(population[i]) + beta0 + beta_erpo * erpo[i] + year_effect[year[i]] + state_effect[state[i]]
+    log_mu[i] <- log(population[i]) +
+                 beta0 +
+                 beta_erpo * erpo[i] +
+                 year_effect[year[i]] +
+                 state_effect[state[i]]
     p[i] <- r / (r + exp(log_mu[i]))
     deaths[i] ~ dnegbin(p[i], r)
   }
-  
-  # Priors
-  beta0 ~ dnorm(0, 0.001)
-  beta_erpo ~ dnorm(0, 10)  # Weakly informative prior centered at 0
-  r ~ dgamma(0.1, 0.1)      # Prior for the dispersion parameter
-  
-  # Random effects for states
+
+  # Fixed effects
+  beta0     ~ dnorm(0, 0.001)
+  beta_erpo ~ dnorm(0, 10)
+  r         ~ dgamma(0.1, 0.1)
+
+  # Non-centered random effects for states
   for (s in 1:n_states) {
-    state_effect[s] ~ dnorm(0, tau_state)
+    state_raw[s]    ~ dnorm(0, 1)
+    state_effect[s] <- state_raw[s] * sigma_state
   }
-  
-  # Year effects
+  sigma_state ~ dnorm(0, 1) T(0, )    # half-normal(0,1)
+
+  # Year fixed effects
   for (j in 1:n_years) {
     year_effect[j] ~ dnorm(0, 0.1)
   }
-  
-  # Hyperpriors
-  tau_state ~ dgamma(0.1, 0.1)
-  
-  # Derived quantities
+
+  # Derived quantity
   IRR_erpo <- exp(beta_erpo)
 }
 "
 
-# Prepare data for model 3
-jags_data3 <- list(
-  n = nrow(analysis_data),
-  n_states = length(unique(state_factor)),
-  n_years = length(unique(year_factor)),
-  deaths = analysis_data$deaths,
+jags_data3_nc <- list(
+  n          = nrow(analysis_data),
+  n_states   = length(unique(state_factor)),
+  n_years    = length(unique(year_factor)),
+  deaths     = analysis_data$deaths,
   population = analysis_data$population,
-  erpo = analysis_data$erpo,
-  state = state_factor,
-  year = year_factor
+  erpo       = analysis_data$erpo,
+  state      = state_factor,
+  year       = year_factor
 )
 
-# Parameters to monitor
-params3 <- c("beta0", "beta_erpo", "IRR_erpo", "r", "tau_state")
+params3_nc <- c("beta0", "beta_erpo", "IRR_erpo", "r", "sigma_state")
 
-# Run JAGS model 3
-cat("Running Model 3: Negative Binomial with state random effects and binary ERPO...\n")
-jags3 <- jags(
-  data = jags_data3,
-  parameters.to.save = params3,
-  model.file = textConnection(jags_model3),
-  n.chains = 3,
-  n.iter = 10000,
-  n.burnin = 1000,
-  n.thin = 5
+jags3_nc <- jags(
+  data               = jags_data3_nc,
+  parameters.to.save = params3_nc,
+  model.file         = textConnection(jags_model3_nc),
+  n.chains           = 3,
+  n.iter             = 10000,
+  n.burnin           = 1000,
+  n.thin             = 5
 )
 
-# Model 4: Negative binomial model with state random effects and phase-in effect
-jags_model4 <- "
+
+# Model 4 (phase-in ERPO, neg-binomial, non-centered RE)
+jags_model4_nc <- "
 model {
-  # Likelihood
   for (i in 1:n) {
-    log_mu[i] <- log(population[i]) + beta0 + beta_phase * erpo_phase_in[i] + year_effect[year[i]] + state_effect[state[i]]
+    log_mu[i] <- log(population[i]) +
+                 beta0 +
+                 beta_phase * erpo_phase_in[i] +
+                 year_effect[year[i]] +
+                 state_effect[state[i]]
     p[i] <- r / (r + exp(log_mu[i]))
     deaths[i] ~ dnegbin(p[i], r)
   }
-  
-  # Priors
-  beta0 ~ dnorm(0, 0.001)
-  beta_phase ~ dnorm(0, 10)  # Weakly informative prior centered at 0
-  r ~ dgamma(0.1, 0.1)       # Prior for the dispersion parameter
-  
-  # Random effects for states
+
+  beta0      ~ dnorm(0, 0.001)
+  beta_phase ~ dnorm(0, 10)
+  r          ~ dgamma(0.1, 0.1)
+
   for (s in 1:n_states) {
-    state_effect[s] ~ dnorm(0, tau_state)
+    state_raw[s]    ~ dnorm(0, 1)
+    state_effect[s] <- state_raw[s] * sigma_state
   }
-  
-  # Year effects
+  sigma_state ~ dnorm(0, 1) T(0, )
+
   for (j in 1:n_years) {
     year_effect[j] ~ dnorm(0, 0.1)
   }
-  
-  # Hyperpriors
-  tau_state ~ dgamma(0.1, 0.1)
-  
-  # Derived quantities
+
   IRR_phase <- exp(beta_phase)
 }
 "
 
-# Prepare data for model 4
-jags_data4 <- list(
-  n = nrow(analysis_data),
-  n_states = length(unique(state_factor)),
-  n_years = length(unique(year_factor)),
-  deaths = analysis_data$deaths,
-  population = analysis_data$population,
-  erpo_phase_in = analysis_data$erpo_phase_in,
-  state = state_factor,
-  year = year_factor
+jags_data4_nc <- list(
+  n              = nrow(analysis_data),
+  n_states       = length(unique(state_factor)),
+  n_years        = length(unique(year_factor)),
+  deaths         = analysis_data$deaths,
+  population     = analysis_data$population,
+  erpo_phase_in  = analysis_data$erpo_phase_in,
+  state          = state_factor,
+  year           = year_factor
 )
 
-# Parameters to monitor
-params4 <- c("beta0", "beta_phase", "IRR_phase", "r", "tau_state")
+params4_nc <- c("beta0", "beta_phase", "IRR_phase", "r", "sigma_state")
 
-# Run JAGS model 4
-cat("Running Model 4: Negative Binomial with state random effects and phase-in effect...\n")
-jags4 <- jags(
-  data = jags_data4,
-  parameters.to.save = params4,
-  model.file = textConnection(jags_model4),
-  n.chains = 3,
-  n.iter = 10000,
-  n.burnin = 1000,
-  n.thin = 5
+jags4_nc <- jags(
+  data               = jags_data4_nc,
+  parameters.to.save = params4_nc,
+  model.file         = textConnection(jags_model4_nc),
+  n.chains           = 3,
+  n.iter             = 10000,
+  n.burnin           = 1000,
+  n.thin             = 5
 )
+
 
 # 4. Extract and visualize results
 # -----------------------------------------------------
@@ -753,7 +763,7 @@ for (t in 1:11) {
 }
 
 # Plot time-varying effects
-time_effects_plot <- ggplot(time_effects, aes(x = Year, y = IRR, ymin = Lower_95CI, ymax = Upper_95CI)) +
+ggplot(time_effects, aes(x = Year, y = IRR, ymin = Lower_95CI, ymax = Upper_95CI)) +
   geom_line(size = 1) +
   geom_ribbon(alpha = 0.3) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "darkgray") +
@@ -766,7 +776,6 @@ time_effects_plot <- ggplot(time_effects, aes(x = Year, y = IRR, ymin = Lower_95
   theme_minimal()
 
 # Save plot
-ggsave("manuscript/figs/time_effects_plot.pdf", time_effects_plot, width = 8, height = 6)
 
 # Save full model 5 results
 results5_full <- list(
@@ -777,6 +786,225 @@ results5_full <- list(
 
 # Return the results for potential further analysis
 results5_full
+
+
+
+library(dplyr)
+
+# 1. Build a small lookup table of IRRs by years-since (1..11)
+irr_lookup <- time_effects %>%
+  mutate(years_since = 0:10) %>%            # 0 through 10
+  select(years_since, IRR)
+
+# 2. For each state-year, compute years_since and join on IRR
+prevented_df <- analysis_data %>%
+  # get each state’s first ERPO year
+  group_by(state) %>%
+  mutate(
+    impl_year = if_else(any(erpo>0), min(year[erpo>0]), NA_real_),
+    years_since = if_else(!is.na(impl_year), year - impl_year, NA_real_)
+  ) %>%
+  ungroup() %>%
+  # cap years_since between 0 and 10, and drop pre‐ERPO years
+  mutate(
+    years_since = pmin(pmax(years_since, 0), 10)
+  ) %>%
+  # join to get the median IRR for that “years_since”
+  left_join(irr_lookup, by = "years_since") %>%
+  # where there was no ERPO yet IRR=1 (no effect)
+  mutate(IRR = if_else(is.na(IRR), 1, IRR)) %>%
+  # 3. compute counterfactual and prevented
+  mutate(
+    deaths_cf    = deaths / IRR,
+    deaths_saved = deaths_cf - deaths
+  )
+
+# 4. Summarize over the full sample
+prevented_df %>%
+  summarize(
+    total_observed     = sum(deaths),
+    total_counterfactual = sum(deaths_cf),
+    total_prevented    = sum(deaths_saved)
+  ) -> prevention_summary
+
+print(prevention_summary)
+
+
+
+# Load necessary packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork) # For combining plots
+
+# Define color palette to match your style
+journal_colors <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9", "#D55E00")
+
+# 1. TRACE PLOT WITH INDIVIDUAL MCMC SAMPLES
+# ------------------------------------------
+# Extract samples for each time point (Years 0-10)
+# We'll create a data frame with n_samples rows for each year
+
+# First, extract MCMC samples from your JAGS output
+# Assuming jags5 is your model output from the code snippet
+n_samples <- nrow(jags5$BUGSoutput$sims.matrix)
+n_years <- 7
+
+# Create empty data frame to store all samples
+trace_data <- data.frame(
+  sample_id = rep(1:n_samples, n_years),
+  year = rep(0:6, each = n_samples),
+  irr = NA
+)
+
+# Fill with IRR values from JAGS output
+for(i in 1:n_years) {
+  param_name <- paste0("IRR[", i, "]")
+  trace_data$irr[trace_data$year == (i-1)] <- jags5$BUGSoutput$sims.matrix[, param_name]
+}
+
+# Calculate summary statistics for each year
+summary_data <- trace_data %>%
+  group_by(year) %>%
+  summarize(
+    median_irr = median(irr),
+    mean_irr = mean(irr),
+    lower_95 = quantile(irr, 0.025),
+    upper_95 = quantile(irr, 0.975)
+  )
+
+
+# Create the trace plot
+trace_plot <- ggplot() +
+  # Add individual traces (sample a subset to avoid overplotting)
+  geom_line(data = trace_data %>% 
+              filter(sample_id %% 20 == 0), # Sample every 20th MCMC sample
+            aes(x = year, y = irr, group = sample_id),
+            color = journal_colors[3], alpha = 0.09, size = 0.3) +
+  # Add median line
+  geom_line(data = summary_data,
+            aes(x = year, y = median_irr),
+            color = 'black', size = 1.2) +
+  # Add reference line at IRR = 1
+  geom_hline(yintercept = 1, linetype = "longdash", color = "gray30", size = 0.8) +
+  annotate("text", x = 4.2, y = 1.02, label = "No effect (IRR = 1)", 
+           hjust = 0, vjust = 0, size = 3, color = "black", fontface = "italic") +
+  # Labels and scales
+  labs(
+    title = "Effect of ERPO Laws Over Time",
+    subtitle = "Individual MCMC traces with median effect highlighted",
+    x = "Years Since Implementation",
+    y = "Incidence Rate Ratio (IRR)",
+  ) +
+  scale_x_continuous(breaks = -1:10, minor_breaks = NULL) +
+  scale_y_continuous(breaks = seq(0.7, 1.3, 0.1), 
+                     minor_breaks = seq(0.65, 1.35, 0.05),
+                     limits = c(0.65, 1.15),
+                     expand = c(0.02, 0)) +
+  # Apply your custom theme
+  theme_classic(base_size = 12, base_family = "Arial") +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b = 10)),
+    plot.subtitle = element_text(size = 12, color = "gray30", margin = margin(b = 15)),
+    plot.caption = element_text(size = 9, color = "gray40", hjust = 0, margin = margin(t = 10)),
+    # Axis elements
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.title.x = element_text(margin = margin(t = 15)),
+    axis.title.y = element_text(margin = margin(r = 15)),
+    axis.text = element_text(size = 10, color = "gray20"),
+    axis.ticks = element_line(color = "gray70", size = 0.3),
+    # Grid lines
+    panel.grid.major = element_line(color = "gray92", size = 0.4),
+    panel.grid.minor = element_line(color = "gray96", size = 0.2),
+    # Overall plot margins
+    plot.margin = margin(20, 25, 20, 20)
+  )
+
+# 2. DENSITY PLOT FOR SELECTED YEARS
+# ----------------------------------
+# Select specific years to show distributions (years 1, 2, 3, 4, 5)
+selected_years <- c(1, 2, 3, 4, 5)
+density_data <- trace_data %>%
+  filter(year %in% selected_years) %>%
+  mutate(Year = factor(paste("Year", year)))
+
+# Create the density plot
+density_plot <- ggplot(density_data, aes(x = irr, fill = Year, color = Year)) +
+  geom_rug(alpha = 0.7, show.legend = FALSE, size = 0.4) +
+  geom_density(alpha = 0.65, size = 0.7) +
+  geom_vline(xintercept = 1, linetype = "longdash", color = "gray30", size = 0.8) +
+  annotate("text", x = 1.02, y = 3, label = "No effect (IRR = 1)", 
+           hjust = 0, vjust = 0, size = 3, color = "black", angle = 90, fontface = "italic") +
+  labs(
+    title = "Posterior Distributions of ERPO Effect by Year",
+    subtitle = "Incidence Rate Ratio distributions for years 1-5 after implementation",
+    x = "Incidence Rate Ratio (IRR)",
+    y = "Density",
+    caption = "Note: Values < 1 indicate a reduction in incidents; values > 1 indicate an increase."
+  ) +
+  scale_x_continuous(breaks = seq(0.7, 1.3, 0.1), 
+                     minor_breaks = seq(0.65, 1.35, 0.05),
+                     limits = c(0.65, 1.1),
+                     expand = c(0.02, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_fill_manual(values = journal_colors[1:5], name = "") +
+  scale_color_manual(values = journal_colors[1:5], name = "") +
+  theme_classic(base_size = 12, base_family = "Arial") +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b = 10)),
+    plot.subtitle = element_text(size = 12, color = "gray30", margin = margin(b = 15)),
+    plot.caption = element_text(size = 9, color = "gray40", hjust = 0, margin = margin(t = 10)),
+    # Axis elements
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.title.x = element_text(margin = margin(t = 15)),
+    axis.title.y = element_text(margin = margin(r = 15)),
+    axis.text = element_text(size = 10, color = "gray20"),
+    axis.ticks = element_line(color = "gray70", size = 0.3),
+    # Grid lines
+    panel.grid.major = element_line(color = "gray92", size = 0.4),
+    panel.grid.minor = element_line(color = "gray96", size = 0.2),
+    # Change legend position to right and adjust spacing
+    legend.position = "right",
+    legend.title = element_text(size = 11, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.key.size = unit(1.2, "lines"),
+    legend.margin = margin(t = 5, r = 0, b = 5, l = 5),
+    legend.box.margin = margin(l = 10),
+    # Overall plot margins
+    plot.margin = margin(20, 25, 20, 20)
+  ) +
+  # Configure legend to display vertically
+  guides(
+    fill = guide_legend(override.aes = list(alpha = 0.8, size = 4), ncol = 1),
+    color = FALSE  # Hide color legend (redundant with fill)
+  )
+
+# Print individual plots or combine them
+# To view individual plots:
+# print(trace_plot)
+# print(density_plot)
+
+# To combine both plots vertically
+combined_plot <- trace_plot / density_plot
+print(combined_plot)
+
+# Save the combined plot
+ggsave("erpo_effects_combined.png", combined_plot, width = 12, height = 10, dpi = 300)
+
+# Alternatively, save individual plots
+# ggsave("erpo_traces.png", trace_plot, width = 10, height = 6, dpi = 300)
+# ggsave("erpo_densities.png", density_plot, width = 10, height = 6, dpi = 300)
+
+
+
+
+
+
+
+
+
+
+
 
 
 

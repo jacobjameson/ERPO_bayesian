@@ -43,7 +43,7 @@ states_grid <- data.frame(
     "WA", "MT", "ND", "SD", "MN", "WI", "MI", "", "NY", "CT", "RI", "",
     "OR", "ID", "WY", "NE", "IA", "IL", "IN", "OH", "PA", "NJ", "", "",
     "CA", "NV", "UT", "CO", "KS", "MO", "KY", "WV", "DC", "MD", "DE", "",
-    "", "AZ", "NM", "OK", "AR", "TN", "VA", "NC", "", "", "", "",
+    "", '', "AZ", "NM", "OK", "AR", "TN", "VA", "NC", "", "", "", 
     "", "", "TX", "LA", "MS", "AL", "GA", "SC", "", "", "", "",
     "HI", "", "", "", "", "", "FL", "", "", "", "", ""
   ),
