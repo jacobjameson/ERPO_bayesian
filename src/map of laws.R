@@ -45,7 +45,7 @@ states_grid <- data.frame(
     "CA", "NV", "UT", "CO", "KS", "MO", "KY", "WV", "DC", "MD", "DE", "",
     "", '', "AZ", "NM", "OK", "AR", "TN", "VA", "NC", "", "", "", 
     "", "", "TX", "LA", "MS", "AL", "GA", "SC", "", "", "", "",
-    "HI", "", "", "", "", "", "FL", "", "", "", "", ""
+    "HI", "", "", "", "", "", "", "FL", "", "", "", ""
   ),
   col = rep(0:11, 8),
   row = rep(0:7, each = 12)
@@ -157,8 +157,6 @@ rows[[2]] <- wrap_plots(c(plot_list[5:7], list(legend = legend_plot)), ncol = 4,
 combined_plot <- rows[[1]] / rows[[2]] +
   plot_layout(heights = rep(1, 2)) +
   plot_annotation(
-    title = "Extreme Risk Protection Order Laws",
-    subtitle = "States with enacted \"red flag\" laws, 1999-2024",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5, family = "serif"),
       plot.subtitle = element_text(size = 14, hjust = 0.5, family = "serif"),

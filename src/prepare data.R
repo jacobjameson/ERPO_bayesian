@@ -3,9 +3,9 @@ library(tidyverse)
 library(dplyr)
 library(tidyr)
 library(lubridate)
+library(janitor)
 
-
-FA_1999_2020 <- read_excel("raw/FA_1999_2020v2.xlsx") %>%
+FA_1999_2020 <- read_excel("raw/suicide/FA_1999_2020v2.xlsx") %>%
   select(-Notes) %>%
   filter(!is.na(State)) %>%
   filter(Year < 2018)
@@ -16,7 +16,7 @@ FA_1999_2020$Deaths[is.na(FA_1999_2020$Deaths)] <- 5
 FA_1999_2020$Population <- as.numeric(FA_1999_2020$Population)
 FA_1999_2020$`Crude Rate` <- FA_1999_2020$Deaths/FA_1999_2020$Population * 100000
 
-FA_2018_2023 <- read_excel("raw/FA_2018_2023v2.xlsx") %>%
+FA_2018_2023 <- read_excel("raw/suicide/FA_2018_2023v2.xlsx") %>%
   select(-Notes)  %>%
   filter(!is.na(State))
 
@@ -157,13 +157,21 @@ merged_data <- merged_data %>%
     first_erpo_year = ifelse(any(erpo > 0), min(year[erpo > 0]), Inf),
     # Create phase-in variable that increases from 0 to 1 over 5 years
     erpo_phase_in = case_when(
-      year < first_erpo_year ~ 0,
-      year >= first_erpo_year + 5 ~ 1,
-      TRUE ~ (year - first_erpo_year + first(erpo[year == first_erpo_year])) / 5
+      year <  first_erpo_year       ~ 0,
+      year >= first_erpo_year + 5   ~ 1,
+      TRUE ~ (year - first_erpo_year) / 5   # 0, .2, .4, .6, .8
+    )
+  ) %>%
+  mutate(
+    erpo_later_phase = case_when(
+      year < first_erpo_year + 5 ~ 0,
+      year >= first_erpo_year + 10 ~ 1,
+      TRUE ~ (year - (first_erpo_year + 5)) / 5
     )
   ) %>%
   select(-first_erpo_year) %>%
   ungroup()
+
 
 # Handle missing values in log rates (for zeros)
 merged_data$log_rate_lag1[is.infinite(merged_data$log_rate_lag1)] <- log(0.5/(merged_data$population_lag1[is.infinite(merged_data$log_rate_lag1)]/1e5))
@@ -173,6 +181,15 @@ merged_data$log_rate_lag2[is.infinite(merged_data$log_rate_lag2)] <- log(0.5/(me
 analysis_data <- merged_data %>%
   filter(!is.na(log_rate_lag2),
          state != 'Connecticut', state != 'District of Columbia')
+
+source("src/stateyeardata.R")
+data
+analysis_data
+analysis_data <- merge(
+  analysis_data,
+  data,
+  by = c("state", "year")
+)
 
 # Save the prepared data
 save(analysis_data, file = "outputs/data/erpo_analysis_data.RData")
